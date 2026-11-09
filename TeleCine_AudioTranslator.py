@@ -15,6 +15,16 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "TeleCine Audio Translator"
 BASE_DIR = Path(__file__).resolve().parent
+
+def read_app_version():
+    """Versie uit VERSION, zodat een volgende release hetzelfde nummer verhoogt."""
+    try:
+        text = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or "0.9.01"
+
+APP_VERSION = read_app_version()
 VOICE_DIR = BASE_DIR / "voices"
 JOB_DIR = BASE_DIR / ".telecine_jobs"
 MODEL_DIR = BASE_DIR / "uvr_models"
@@ -33,7 +43,7 @@ def translation_route_note(source):
     return ""
 
 WHISPER_MODELS = ["tiny", "base", "small", "medium"]
-STEPS = ["Bestand controleren", "Franse stem scheiden (UVR)", "Spraak herkennen",
+STEPS = ["Bestand controleren", "Stem scheiden (UVR)", "Spraak herkennen",
          "Naar Nederlands vertalen", "Vlaamse WAV genereren", "Achtergrond mengen", "Resultaten opslaan"]
 WEIGHTS = [0.02, 0.28, 0.35, 0.10, 0.17, 0.06, 0.02]
 
@@ -153,6 +163,20 @@ def popen_hidden(cmd, **kwargs):
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
     return subprocess.Popen(cmd, **kwargs)
 
+def console_python(executable=None):
+    """Python voor Piper en andere hulpmiddelen.
+
+    Het bureaublad-icoon start het venster met pythonw.exe. Dat programma heeft
+    geen console; Piper krijgt dan geen bruikbare standaarduitvoer. python.exe
+    in dezelfde map wel, en popen_hidden verbergt dat venster.
+    """
+    exe = Path(executable or sys.executable)
+    if exe.name.lower() == "pythonw.exe":
+        console = exe.with_name("python.exe")
+        if console.exists():
+            return str(console)
+    return str(exe)
+
 def fit_channels(audio, channels):
     """Maak een audioblok exact `channels` kanalen breed."""
     import numpy as np
@@ -209,7 +233,7 @@ def translate_segments(segments, source, stop, callback):
 def run_piper(text, output, voice_name, stop, child_setter):
     env=os.environ.copy(); es=find_espeak_data()
     if es: env["ESPEAK_DATA_PATH"]=es
-    cmd=[sys.executable,"-m","piper","--data-dir",str(VOICE_DIR),"-m",voice_name,"-f",str(output)]
+    cmd=[console_python(),"-m","piper","--data-dir",str(VOICE_DIR),"-m",voice_name,"-f",str(output)]
     proc=popen_hidden(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
                       encoding="utf-8",errors="replace",env=env)
     child_setter(proc)
@@ -284,7 +308,7 @@ def mix_wavs(background, voice, output, bg_gain=1.0, voice_gain=1.0):
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title(APP_TITLE); self.geometry("1180x920"); self.minsize(920,760)
+        super().__init__(); self.title(f"{APP_TITLE} {APP_VERSION}"); self.geometry("1180x900"); self.minsize(920,640)
         self.q=queue.Queue(); self.stop_event=threading.Event(); self.worker=None; self.child=None
         self.started=None; self.elapsed_before=0.; self.progress=0.; self.state=None
         self.source=tk.StringVar(); self.outdir=tk.StringVar(value=str(BASE_DIR/"Output"))
@@ -367,7 +391,7 @@ class App(tk.Tk):
             widget.bind("<Button-4>",on_wheel,add="+")
             widget.bind("<Button-5>",on_wheel,add="+")
             for child in widget.winfo_children(): bind_wheel(child)
-        ttk.Label(m,text=APP_TITLE,font=self._ui_font(16,True)).grid(row=0,column=0,columnspan=3,sticky="w",pady=(0,8))
+        ttk.Label(m,text=f"{APP_TITLE}  {APP_VERSION}",font=self._ui_font(16,True)).grid(row=0,column=0,columnspan=3,sticky="w",pady=(0,8))
         ttk.Label(m,text="Bronbestand (WAV):").grid(row=1,column=0,sticky="w")
         self.source_entry=ttk.Entry(m,textvariable=self.source); self.source_entry.grid(row=1,column=1,sticky="ew",padx=8)
         self.source_button=ttk.Button(m,text="Kiezen...",command=self.choose_source); self.source_button.grid(row=1,column=2)
@@ -467,14 +491,20 @@ class App(tk.Tk):
             self._fitting=False
 
     def _place_on_screen(self):
+        """Hoogte past op 1080p: taakbalk en titelbalk blijven vrij."""
         self.update_idletasks()
         screen_w=max(1,self.winfo_screenwidth()); screen_h=max(1,self.winfo_screenheight())
-        width=min(1180,max(640,screen_w))
-        wanted=max(760,getattr(self,"_pinned_height",700)+160)
-        height=min(screen_h-8,max(wanted,screen_h-12))
-        x=max(0,(screen_w-width)//2); y=max(0,(screen_h-height)//2)
+        # 1920x1080 minus een Windows-taakbalk (~48) en de titelbalk (~40).
+        margin=88
+        max_h=max(520,min(screen_h-margin,1080-margin))
+        width=min(1180,max(640,screen_w-16))
+        wanted=getattr(self,"_pinned_height",700)+150
+        height=min(max_h,max(640,wanted))
+        x=max(0,(screen_w-width)//2)
+        y=max(0,min(24,(screen_h-margin-height)//2))
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(min(860,screen_w),min(620,max(520,screen_h-8)))
+        self.minsize(min(860,screen_w),min(620,max_h))
+        self.maxsize(max(width,screen_w),max_h)
 
     def _on_volume_change(self,*_):
         try:
