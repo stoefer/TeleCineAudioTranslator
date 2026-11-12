@@ -62,7 +62,9 @@ jobs:
             echo
             echo "Download ${folder}-Windows.zip. Pak die uit naar een gewone map, bijvoorbeeld het Bureaublad. Start installeer.bat niet vanuit het zip-bestand."
             echo
-            echo "Nieuw: na de spraakherkenning kun je de transcriptie corrigeren, en na de vertaling het Nederlands, voordat de Vlaamse stem verdergaat. De begin- en eindtijd van elke zin blijven staan. In de uitvoermap komen ook ondertitels."
+            echo "Nieuw: kies Licht of Donker bij Weergave, rechtsboven in de instellingen. Die keuze blijft bij de volgende start. Het venster opent zo hoog als de instellingen nodig hebben, tot aan de vrije schermhoogte."
+            echo
+            echo "Na de spraakherkenning kun je de transcriptie corrigeren, en na de vertaling het Nederlands, voordat de Vlaamse stem verdergaat. De begin- en eindtijd van elke zin blijven staan. In de uitvoermap komen ook ondertitels."
             echo
             echo "Op Windows is Python 3.12 nodig voor stemscheiding. Python 3.14 heeft dat pakket niet. eSpeak NG is nodig voor de Vlaamse uitspraak."
           } > "$notes"

@@ -374,5 +374,48 @@ class AppPauseTests(unittest.TestCase):
         self.assertNotIn("out", holder)
 
 
+class AppearanceTests(unittest.TestCase):
+    def test_startup_height_fits_the_content_until_the_screen_is_full(self):
+        width, height = appmod.startup_window_size(1920, 1080, 1500)
+        self.assertEqual(width, 1180)
+        self.assertEqual(height, 1080 - 88)
+        width, height = appmod.startup_window_size(2560, 1440, 1200)
+        self.assertEqual(height, 1200)
+        width, height = appmod.startup_window_size(1280, 800, 400)
+        self.assertEqual(width, 1180)
+        self.assertEqual(height, 640)
+
+    def test_appearance_choice_is_in_the_settings_and_switches_colors(self):
+        app = appmod.App()
+        app.update()
+        try:
+            self.assertEqual(list(app.theme_box.cget("values")), ["Licht", "Donker"])
+            self.assertEqual(app.theme_box.winfo_manager(), "grid")
+            app.appearance.set("Donker")
+            app.apply_appearance()
+            dark = appmod.APPEARANCE_COLORS["Donker"]
+            self.assertEqual(app.cget("bg"), dark["bg"])
+            self.assertEqual(app.steps.cget("bg"), dark["field"])
+            self.assertEqual(app.steps.cget("fg"), dark["fg"])
+            self.assertEqual(app.meters["input"].peak_canvas.cget("bg"), dark["meter"])
+            self.assertEqual(str(app.meter_legend.cget("foreground")), dark["muted"])
+            app.appearance.set("Licht")
+            app.apply_appearance()
+            light = appmod.APPEARANCE_COLORS["Licht"]
+            self.assertEqual(app.cget("bg"), light["bg"])
+            self.assertEqual(app.steps.cget("bg"), light["field"])
+            self.assertEqual(str(app.meter_legend.cget("foreground")), light["muted"])
+        finally:
+            cancel_after(app)
+            app.destroy()
+
+    def test_appearance_is_remembered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "weergave.json"
+            appmod.save_appearance("Donker", path)
+            self.assertEqual(appmod.load_appearance(path), "Donker")
+            self.assertEqual(appmod.load_appearance(Path(folder) / "ontbreekt.json"), "Licht")
+
+
 if __name__ == "__main__":
     unittest.main()

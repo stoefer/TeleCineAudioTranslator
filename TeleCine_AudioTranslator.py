@@ -45,6 +45,80 @@ def translation_route_note(source):
         return "Frans wordt via Engels vertaald."
     return ""
 
+APPEARANCES = ("Licht", "Donker")
+APPEARANCE_COLORS = {
+    "Licht": {
+        "bg": "#f4f4f4", "fg": "#1c1c1c", "muted": "#555555", "field": "#ffffff",
+        "button": "#e6e6e6", "button_active": "#d5d5d5", "disabled": "#ececec",
+        "border": "#b5b5b5", "accent": "#2f6fad", "warning": "#8a3b00", "hint": "#333333",
+        "meter": "#202020", "meter_mark": "#555555", "hold": "#ffffff",
+    },
+    "Donker": {
+        "bg": "#1e1e1e", "fg": "#f2f2f2", "muted": "#bdbdbd", "field": "#2c2c2c",
+        "button": "#3a3a3a", "button_active": "#4a4a4a", "disabled": "#2a2a2a",
+        "border": "#555555", "accent": "#6cb6ff", "warning": "#ffb74d", "hint": "#d7d7d7",
+        "meter": "#141414", "meter_mark": "#666666", "hold": "#ffffff",
+    },
+}
+_appearance_colors = APPEARANCE_COLORS["Licht"]
+
+def startup_window_size(screen_w, screen_h, content_h, margin=88):
+    """Hoogte en breedte bij de start.
+
+    Het venster opent meteen zo hoog dat de instellingen erin passen. Is het
+    scherm korter, dan gebruikt het de vrije hoogte en schuift de rest.
+    """
+    screen_w = max(1, int(screen_w))
+    screen_h = max(1, int(screen_h))
+    avail_h = max(520, screen_h - margin)
+    width = min(1180, max(640, screen_w - 16))
+    height = min(avail_h, max(640, int(content_h)))
+    return width, height
+
+def appearance_path():
+    return JOB_DIR / "weergave.json"
+
+def load_appearance(path=None):
+    path = Path(path) if path is not None else appearance_path()
+    try:
+        name = json.loads(Path(path).read_text(encoding="utf-8")).get("appearance", "")
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        name = ""
+    return name if name in APPEARANCES else "Licht"
+
+def save_appearance(name, path=None):
+    if name not in APPEARANCES:
+        return
+    path = Path(path) if path is not None else appearance_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"appearance": name}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+def paint_tk_tree(widget, colors):
+    """Kleurt de Tk-onderdelen. ttk volgt de stijl."""
+    kind = ""
+    try:
+        kind = widget.winfo_class()
+    except tk.TclError:
+        return
+    try:
+        if kind in ("Tk", "Toplevel"):
+            widget.configure(bg=colors["bg"])
+        elif kind == "Canvas":
+            if getattr(widget, "_meter_canvas", False):
+                widget.configure(bg=colors["meter"], highlightbackground=colors["border"])
+            else:
+                widget.configure(bg=colors["bg"])
+        elif kind == "Text":
+            widget.configure(bg=colors["field"], fg=colors["fg"], insertbackground=colors["fg"])
+        elif kind == "Label":
+            widget.configure(bg=colors["bg"], fg=colors["fg"])
+        elif kind == "Scrollbar":
+            widget.configure(background=colors["button"], troughcolor=colors["field"], activebackground=colors["muted"])
+    except tk.TclError:
+        pass
+    for child in widget.winfo_children():
+        paint_tk_tree(child, colors)
+
 WHISPER_MODELS = ["tiny", "base", "small", "medium"]
 STEPS = ["Bestand controleren", "Stem scheiden (UVR)", "Spraak herkennen",
          "Naar Nederlands vertalen", "Vlaamse WAV genereren", "Achtergrond mengen", "Resultaten opslaan"]
@@ -82,6 +156,8 @@ class LevelMeter(ttk.Frame):
         ttk.Label(self,text=title,width=18).grid(row=0,column=0,rowspan=2,sticky="w",padx=(0,6))
         self.peak_canvas=tk.Canvas(self,height=14,bg="#202020",highlightthickness=1,highlightbackground="#666")
         self.rms_canvas=tk.Canvas(self,height=14,bg="#202020",highlightthickness=1,highlightbackground="#666")
+        self.peak_canvas._meter_canvas=True
+        self.rms_canvas._meter_canvas=True
         self.peak_canvas.grid(row=0,column=1,sticky="ew",pady=1); self.rms_canvas.grid(row=1,column=1,sticky="ew",pady=1)
         self.peak_text=ttk.Label(self,text="Peak  --,- dBFS",width=19); self.rms_text=ttk.Label(self,text="RMS   --,- dBFS",width=19)
         self.peak_text.grid(row=0,column=2,padx=(7,0)); self.rms_text.grid(row=1,column=2,padx=(7,0))
@@ -97,10 +173,11 @@ class LevelMeter(ttk.Frame):
         for lo,hi,color in zones:
             xa=self._x(lo,w); xb=min(x,self._x(hi,w))
             if xb>xa: canvas.create_rectangle(xa,1,xb,h-1,fill=color,outline="")
+        mark_color=_appearance_colors["meter_mark"]
         for mark in (-24,-12,-6,-3):
-            xm=self._x(mark,w); canvas.create_line(xm,0,xm,h,fill="#555")
+            xm=self._x(mark,w); canvas.create_line(xm,0,xm,h,fill=mark_color)
         if hold is not None and hold>-120:
-            xh=self._x(hold,w); canvas.create_line(xh,0,xh,h,fill="white",width=2)
+            xh=self._x(hold,w); canvas.create_line(xh,0,xh,h,fill=_appearance_colors["hold"],width=2)
     def set_levels(self,peak,rms,reset_hold=False):
         self.values=(float(peak),float(rms))
         p=dbfs(peak); r=dbfs(rms)
@@ -425,6 +502,7 @@ class TranscriptEditor(tk.Toplevel):
         self._closed = False
         self._history = []
         self._text_widgets = []
+        self._source_labels = []
         self.segments = apply_transcript_edits(segments, [spoken_text(item, field) for item in segments], field)
         self.original = [dict(item) for item in self.segments]
         self.protocol("WM_DELETE_WINDOW", self._ask_cancel)
@@ -535,6 +613,7 @@ class TranscriptEditor(tk.Toplevel):
         for child in self.list_frame.winfo_children():
             child.destroy()
         self._text_widgets = []
+        self._source_labels = []
         self.list_frame.columnconfigure(0, weight=1)
         can_listen = bool(self.audio_path and self.audio_path.is_file())
         mono = ("TkFixedFont", 10)
@@ -558,8 +637,9 @@ class TranscriptEditor(tk.Toplevel):
             text_row = 1
             if self.editing_translation:
                 source = spoken_text(segment, "text") or "(lege bronzin)"
-                source_label = tk.Label(block, text="bron  " + source, anchor="w", justify="left", fg="#555555")
+                source_label = tk.Label(block, text="bron  " + source, anchor="w", justify="left", fg=_appearance_colors["muted"])
                 source_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(2, 0))
+                self._source_labels.append(source_label)
                 block.bind("<Configure>", lambda event, label=source_label: label.configure(wraplength=max(200, event.width - 24)), add="+")
                 text_row = 2
             widget = tk.Text(block, height=3, wrap="word", undo=True, font=mono)
@@ -578,6 +658,18 @@ class TranscriptEditor(tk.Toplevel):
         if self._text_widgets:
             choice = min(max(0, focus_index), len(self._text_widgets) - 1)
             self._text_widgets[choice].focus_set()
+        colors = getattr(self.master, "_colors", None)
+        if colors:
+            try:
+                self.configure(bg=colors["bg"])
+            except tk.TclError:
+                pass
+            paint_tk_tree(self, colors)
+            for label in self._source_labels:
+                try:
+                    label.configure(fg=colors["muted"], bg=colors["bg"])
+                except tk.TclError:
+                    pass
 
     def _focus_relative(self, index, direction):
         if not self._text_widgets:
@@ -711,7 +803,10 @@ class App(tk.Tk):
         self.status=tk.StringVar(value="Klaar om te starten"); self.step=tk.StringVar(value="Stap: nog niet gestart")
         self.resume_text=tk.StringVar(value="Hervatten vanaf: niet van toepassing")
         self.percent=tk.StringVar(value="0%"); self.elapsed=tk.StringVar(value="00:00:00"); self.remaining=tk.StringVar(value="Nog niet beschikbaar")
-        self.build(); self._place_on_screen(); self.after(100,self.process_queue); self.after(500,self.clock); self.protocol("WM_DELETE_WINDOW",self.close)
+        self.appearance=tk.StringVar(value=load_appearance())
+        self._colors=APPEARANCE_COLORS[self.appearance.get()]
+        self._auto_place=2
+        self.build(); self.apply_appearance(); self._place_on_screen(); self.after(200,self._place_on_screen); self.after(100,self.process_queue); self.after(500,self.clock); self.protocol("WM_DELETE_WINDOW",self.close)
         self.bg_volume.trace_add("write",self._on_volume_change); self.voice_volume.trace_add("write",self._on_volume_change)
         self.voice_choice.trace_add("write",lambda *_:self.refresh_environment_status()); self.use_uvr.trace_add("write",lambda *_:self.refresh_environment_status())
         self.show_route_note(); self.refresh_environment_status()
@@ -771,7 +866,13 @@ class App(tk.Tk):
             widget.bind("<Button-4>",on_wheel,add="+")
             widget.bind("<Button-5>",on_wheel,add="+")
             for child in widget.winfo_children(): bind_wheel(child)
-        ttk.Label(m,text=f"{APP_TITLE}  {APP_VERSION}",font=self._ui_font(16,True)).grid(row=0,column=0,columnspan=3,sticky="w",pady=(0,8))
+        head=ttk.Frame(m); head.grid(row=0,column=0,columnspan=3,sticky="ew",pady=(0,8)); head.columnconfigure(0,weight=1)
+        ttk.Label(head,text=f"{APP_TITLE}  {APP_VERSION}",font=self._ui_font(16,True)).grid(row=0,column=0,sticky="w")
+        ttk.Label(head,text="Weergave").grid(row=0,column=1,padx=(12,6))
+        self.theme_box=ttk.Combobox(head,textvariable=self.appearance,values=list(APPEARANCES),state="readonly",width=10)
+        self.theme_box.grid(row=0,column=2,sticky="e")
+        self.theme_box.bind("<<ComboboxSelected>>",self.apply_appearance)
+        self._settings_frame=m
         ttk.Label(m,text="Bronbestand (WAV of MP4):").grid(row=1,column=0,sticky="w")
         self.source_entry=ttk.Entry(m,textvariable=self.source); self.source_entry.grid(row=1,column=1,sticky="ew",padx=8)
         self.source_button=ttk.Button(m,text="Kiezen...",command=self.choose_source); self.source_button.grid(row=1,column=2)
@@ -788,7 +889,7 @@ class App(tk.Tk):
         self.model=ttk.Combobox(opt,textvariable=self.whisper,values=WHISPER_MODELS,state="readonly"); self.model.grid(row=1,column=1,sticky="ew",padx=8)
         self.voice=ttk.Combobox(opt,textvariable=self.voice_choice,values=list(VOICES),state="readonly"); self.voice.current(0); self.voice.grid(row=1,column=2,sticky="ew")
         self.route_inline=tk.StringVar(value="")
-        ttk.Label(opt,textvariable=self.route_inline,foreground="#555").grid(row=2,column=0,columnspan=3,sticky="w",pady=(6,0))
+        ttk.Label(opt,textvariable=self.route_inline).grid(row=2,column=0,columnspan=3,sticky="w",pady=(6,0))
         self.edit_check=ttk.Checkbutton(opt,text="Transcriptie bewerken voor de vertaling (tijden blijven staan)",variable=self.edit_transcript)
         self.edit_check.grid(row=3,column=0,columnspan=3,sticky="w",pady=(6,0))
         self.translation_check=ttk.Checkbutton(opt,text="Nederlandse vertaling bewerken voor de spraak (tijden blijven staan)",variable=self.edit_translation)
@@ -816,7 +917,8 @@ class App(tk.Tk):
         meterbox.columnconfigure(0,weight=1)
         for row,(key,label) in enumerate((("input","IN origineel"),("background","UVR-achtergrond"),("voice","Vlaamse stem"),("output","OUT eindmix"))):
             meter=LevelMeter(meterbox,label); meter.grid(row=row,column=0,sticky="ew",pady=1); self.meters[key]=meter
-        ttk.Label(meterbox,text="Groen: normaal   Geel: hoog   Rood: dicht bij 0 dBFS   Witte lijn: Peak Hold",foreground="#555").grid(row=4,column=0,sticky="w",pady=(4,0))
+        self.meter_legend=ttk.Label(meterbox,text="Groen: normaal   Geel: hoog   Rood: dicht bij 0 dBFS   Witte lijn: Peak Hold")
+        self.meter_legend.grid(row=4,column=0,sticky="w",pady=(4,0))
         player=ttk.LabelFrame(meterbox,text="Resultaat afspelen met live meters",padding=6); player.grid(row=5,column=0,sticky="ew",pady=(8,0)); player.columnconfigure(3,weight=1)
         self.play_button=ttk.Button(player,text="▶ Afspelen",command=self.play_audio); self.play_button.grid(row=0,column=0,padx=(0,5))
         self.pause_button=ttk.Button(player,text="⏸ Pauze",command=self.pause_audio,state="disabled"); self.pause_button.grid(row=0,column=1,padx=5)
@@ -841,7 +943,56 @@ class App(tk.Tk):
         outer.rowconfigure(2,minsize=meterbox.winfo_reqheight())
         self._button_bar=b
         self._pinned_height=uvr_bar.winfo_reqheight()+meterbox.winfo_reqheight()+p.winfo_reqheight()+self.hint_label.winfo_reqheight()+b.winfo_reqheight()+48
+        self._scroll_canvas=canvas
         self.bind("<Configure>",self._on_window_configure)
+
+    def apply_appearance(self,*_):
+        """Zet licht of donker. De keuze blijft bewaard voor de volgende start."""
+        global _appearance_colors
+        name=self.appearance.get()
+        if name not in APPEARANCE_COLORS:
+            name="Licht"; self.appearance.set(name)
+        colors=APPEARANCE_COLORS[name]
+        _appearance_colors=colors
+        self._colors=colors
+        style=ttk.Style(self)
+        style.theme_use("clam")
+        style.configure(".",background=colors["bg"],foreground=colors["fg"],fieldbackground=colors["field"],bordercolor=colors["border"],troughcolor=colors["field"])
+        style.configure("TFrame",background=colors["bg"])
+        style.configure("TLabel",background=colors["bg"],foreground=colors["fg"])
+        style.configure("TLabelframe",background=colors["bg"],foreground=colors["fg"],bordercolor=colors["border"])
+        style.configure("TLabelframe.Label",background=colors["bg"],foreground=colors["fg"])
+        style.configure("TButton",background=colors["button"],foreground=colors["fg"],bordercolor=colors["border"])
+        style.map("TButton",background=[("active",colors["button_active"]),("disabled",colors["disabled"])],foreground=[("disabled",colors["muted"])])
+        style.configure("TCheckbutton",background=colors["bg"],foreground=colors["fg"])
+        style.map("TCheckbutton",background=[("active",colors["bg"])])
+        style.configure("TEntry",fieldbackground=colors["field"],foreground=colors["fg"],bordercolor=colors["border"])
+        style.configure("TCombobox",fieldbackground=colors["field"],foreground=colors["fg"],background=colors["button"],arrowcolor=colors["fg"],bordercolor=colors["border"])
+        style.map("TCombobox",fieldbackground=[("readonly",colors["field"])],foreground=[("readonly",colors["fg"])])
+        style.configure("TScrollbar",background=colors["button"],troughcolor=colors["field"],arrowcolor=colors["fg"],bordercolor=colors["border"])
+        style.configure("Horizontal.TScale",background=colors["bg"],troughcolor=colors["field"])
+        style.configure("Vertical.TScrollbar",background=colors["button"],troughcolor=colors["field"],arrowcolor=colors["fg"])
+        style.configure("TProgressbar",background=colors["accent"],troughcolor=colors["field"])
+        try: self.configure(bg=colors["bg"])
+        except tk.TclError: pass
+        paint_tk_tree(self,colors)
+        editor=getattr(self,"_transcript_editor",None)
+        if editor is not None:
+            try: editor.configure(bg=colors["bg"])
+            except tk.TclError: pass
+            paint_tk_tree(editor,colors)
+            for label in getattr(editor,"_source_labels",()):
+                try: label.configure(fg=colors["muted"],bg=colors["bg"])
+                except tk.TclError: pass
+        legend=getattr(self,"meter_legend",None)
+        if legend is not None:
+            try: legend.configure(foreground=colors["muted"])
+            except tk.TclError: pass
+        for meter in getattr(self,"meters",{}).values():
+            meter.redraw()
+        if hasattr(self,"_refresh_hint"):
+            self._refresh_hint()
+        save_appearance(name)
 
     def _on_window_configure(self,event):
         if event.widget is not self: return
@@ -876,21 +1027,27 @@ class App(tk.Tk):
         finally:
             self._fitting=False
 
+    def _content_size(self):
+        """Gewenste venstergrootte: instellingen plus de vaste meters en knoppen."""
+        self.update_idletasks()
+        settings=self._settings_frame.winfo_reqheight() if hasattr(self,"_settings_frame") else 0
+        width=self._settings_frame.winfo_reqwidth() if hasattr(self,"_settings_frame") else 1180
+        return max(640,width), settings+getattr(self,"_pinned_height",0)
+
     def _place_on_screen(self):
-        """Hoogte past op 1080p: taakbalk en titelbalk blijven vrij."""
+        """Opent het venster meteen hoog genoeg. Een tweede keer na de eerste layout."""
+        if getattr(self,"_auto_place",1)<=0: return
+        self._auto_place-=1
         self.update_idletasks()
         screen_w=max(1,self.winfo_screenwidth()); screen_h=max(1,self.winfo_screenheight())
-        # 1920x1080 minus een Windows-taakbalk (~48) en de titelbalk (~40).
-        margin=88
-        max_h=max(520,min(screen_h-margin,1080-margin))
-        width=min(1180,max(640,screen_w-16))
-        wanted=getattr(self,"_pinned_height",700)+150
-        height=min(max_h,max(640,wanted))
+        _content_w,content_h=self._content_size()
+        width,height=startup_window_size(screen_w,screen_h,content_h)
         x=max(0,(screen_w-width)//2)
-        y=max(0,min(24,(screen_h-margin-height)//2))
+        y=max(0,min(24,(screen_h-88-height)//2))
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(min(860,screen_w),min(620,max_h))
-        self.maxsize(max(width,screen_w),max_h)
+        avail_h=max(520,screen_h-88)
+        self.minsize(min(860,screen_w),min(620,avail_h))
+        self.maxsize(max(width,screen_w),max(height,avail_h))
 
     def _on_volume_change(self,*_):
         try:
@@ -912,7 +1069,8 @@ class App(tk.Tk):
         else:
             self.hint.set("Klaar om te starten. Kies een WAV of MP4 en druk op AUDIO VERTALEN.")
         if hasattr(self,"hint_label"):
-            self.hint_label.configure(fg="#8a3b00" if warning else "#333333")
+            colors=getattr(self,"_colors",APPEARANCE_COLORS["Licht"])
+            self.hint_label.configure(bg=colors["bg"],fg=colors["warning"] if warning else colors["hint"])
         if self.worker and self.worker.is_alive(): return
         current=self.status.get()
         idle=current.startswith("Klaar om te starten") or current.startswith("Installatie") or current.startswith("Stem") or current.startswith("eSpeak") or current.startswith("Vertaal") or current.startswith("Controle")
@@ -1203,7 +1361,7 @@ class App(tk.Tk):
     def running(self,on):
         self.start.config(state="disabled" if on else "normal"); self.stop.config(state="normal" if on else "disabled")
         if on: self.resume.config(state="disabled")
-        for widget in (self.source_entry,self.out_entry,self.source_button,self.out_button,self.uvr_check,self.keep_stems_check,self.sync_check,self.edit_check,self.translation_check,self.mp4_check,self.bg_scale,self.voice_scale):
+        for widget in (self.source_entry,self.out_entry,self.source_button,self.out_button,self.uvr_check,self.keep_stems_check,self.sync_check,self.mp4_check,self.edit_check,self.translation_check,self.bg_scale,self.voice_scale):
             widget.config(state="disabled" if on else "normal")
         for widget in (self.lang,self.model,self.voice,self.speed_box):
             widget.config(state="disabled" if on else "readonly")
@@ -1452,8 +1610,8 @@ class App(tk.Tk):
                 elif kind=="completed":
                     self.stop_audio(); self.play_status.set("Eindmix gereed voor live afspelen")
                     done_note=translation_route_note((self.state or {}).get("source_language",""))
-                    srt=x[2] if len(x)>2 and x[2] else ""
-                    self.set_progress(100); self.running(False); self.resume.config(state="disabled"); self.status.set("Klaar! "+done_note if done_note else "Klaar!"); self.remaining.set("00:00:00"); self.show_steps(len(STEPS),"completed"); messagebox.showinfo(APP_TITLE,"Verwerking voltooid.\n\n"+x[1]+(("\n\nNederlandse ondertitels:\n"+srt) if srt else "")+(("\n\n"+done_note) if done_note else "")+("\n\nLet op: enkele segmenten waren langer dan hun tijdvak en kunnen overlappen." if self.state and self.state.get("timing_warnings") else ""))
+                    self.set_progress(100); self.running(False); self.resume.config(state="disabled"); self.status.set("Klaar! "+done_note if done_note else "Klaar!"); self.remaining.set("00:00:00"); srt=x[2] if len(x)>2 and x[2] else ""
+                    self.show_steps(len(STEPS),"completed"); messagebox.showinfo(APP_TITLE,"Verwerking voltooid.\n\n"+x[1]+(("\n\nNederlandse ondertitels:\n"+srt) if srt else "")+(("\n\n"+done_note) if done_note else "")+("\n\nLet op: enkele segmenten waren langer dan hun tijdvak en kunnen overlappen." if self.state and self.state.get("timing_warnings") else ""))
                 elif kind=="error":
                     _,err,n=x; self.running(False); self.resume.config(state="normal"); self.status.set("Fout tijdens verwerking"); self.resume_text.set(f"Hervatten vanaf stap {n+1}: {STEPS[min(n,len(STEPS)-1)]}"); self.show_steps(min(n,len(STEPS)-1),"error"); messagebox.showerror(APP_TITLE,err)
         except queue.Empty:pass
