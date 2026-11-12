@@ -1,8 +1,8 @@
 # TeleCine Audio Translator
 
-Versie **0.9.04**. Het venster toont het nummer uit het bestand `VERSION`.
+Versie **0.9.05**. Het venster toont het nummer uit het bestand `VERSION`.
 
-Vensterprogramma dat een Franse of Engelse WAV omzet naar Vlaamse spraak. Het behoudt de originele timing en kan de achtergrondmuziek laten staan.
+Vensterprogramma dat een WAV of MP4 omzet naar Vlaamse spraak. Brontalen: Frans, Engels, Duits, Spaans, Italiaans, Zweeds, Noors, Deens en Fins. Het behoudt de originele timing en kan de achtergrondmuziek laten staan.
 
 Je hoeft geen IDE te openen en geen `python`-commando te typen. Na de eenmalige installatie start je het met een dubbelklik.
 
@@ -14,7 +14,7 @@ Je hoeft geen IDE te openen en geen `python`-commando te typen. Na de eenmalige 
 
 De eerste keer heeft internet nodig. Het script maakt een virtuele omgeving, installeert de onderdelen, downloadt de stemmen Nathalie en RDH, en zet **TeleCine Audio Translator** op het bureaublad.
 
-Engels wordt rechtstreeks naar het Nederlands vertaald. Frans gaat via Engels, omdat Argos geen rechtstreeks Frans-Nederlands pakket meer aanbiedt.
+Engels wordt rechtstreeks naar het Nederlands vertaald. Frans, Duits, Spaans, Italiaans, Zweeds, Noors, Deens en Fins gaan via Engels, omdat Argos daar geen rechtstreeks pakket naar het Nederlands voor aanbiedt. Noors is Noors Bokmål. Het pakket van een taal wordt bij de eerste vertaling in die taal gedownload.
 
 Daarna: dubbelklik dat bureaublad-icoon. Er opent geen zwart opdrachtvenster.
 
@@ -51,6 +51,7 @@ Op Linux start je `./start.sh` in een terminal, zodat de melding zichtbaar blijf
 ## Tijdens het gebruik
 
 - Bron: een WAV-bestand of een MP4. Bij een MP4 blijft het beeld staan en komt de vertaling in een nieuwe MP4, als het vinkje **Bij een MP4 het beeld behouden** aanstaat. Daarvoor is [FFmpeg](https://ffmpeg.org/download.html) nodig. Zet `ffmpeg.exe` in PATH of in de programmamap. De WAV-mix wordt er ook nog bij geschreven.
+- Brontaal: Frans, Engels, Duits, Spaans, Italiaans, Zweeds, Noors, Deens of Fins. Engels gaat rechtstreeks naar het Nederlands. De andere talen gaan via Engels. Onder de taalkeuze staat dat vermeld.
 - Resultaat: de map `Output` (knop **UITVOERMAP OPENEN**). Daar staan de Vlaamse WAV (en eventueel MP4), de tekstbestanden en de ondertitels `..._vertaling_nl.srt` en `..._transcript_<taal>.srt`.
 - **Transcriptie bewerken voor de vertaling** staat standaard aan. Na de spraakherkenning verschijnt een venster met elke zin en haar begin- en eindtijd. Pas de zinsbouw aan en kies **Vertaling starten**.
 - **Nederlandse vertaling bewerken voor de spraak** staat ook standaard aan. Na de vertaling kun je het Nederlands corrigeren. De bronzin staat erboven. Kies daarna **Spraak starten**. De tijden blijven die van de herkenning, zodat de Nederlandse ondertitel en de Vlaamse stem op dezelfde plaats vallen.

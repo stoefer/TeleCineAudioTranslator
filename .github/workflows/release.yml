@@ -62,7 +62,9 @@ jobs:
             echo
             echo "Download ${folder}-Windows.zip. Pak die uit naar een gewone map, bijvoorbeeld het Bureaublad. Start installeer.bat niet vanuit het zip-bestand."
             echo
-            echo "Nieuw: kies Licht of Donker bij Weergave, rechtsboven in de instellingen. Die keuze blijft bij de volgende start. Het venster opent zo hoog als de instellingen nodig hebben, tot aan de vrije schermhoogte."
+            echo "Nieuw: brontalen Duits, Spaans, Italiaans, Zweeds, Noors, Deens en Fins, naast Frans en Engels. Engels gaat rechtstreeks naar het Nederlands. De andere talen gaan via Engels. Noors is Noors Bokmål. Het vertaalpakket van een taal wordt bij de eerste vertaling in die taal gedownload."
+            echo
+            echo "Kies Licht of Donker bij Weergave, rechtsboven in de instellingen. Die keuze blijft bij de volgende start. Het venster opent zo hoog als de instellingen nodig hebben, tot aan de vrije schermhoogte."
             echo
             echo "Na de spraakherkenning kun je de transcriptie corrigeren, en na de vertaling het Nederlands, voordat de Vlaamse stem verdergaat. De begin- en eindtijd van elke zin blijven staan. In de uitvoermap komen ook ondertitels."
             echo

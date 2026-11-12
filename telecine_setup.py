@@ -16,6 +16,13 @@ VOICE_FILES = [
     "nl/nl_BE/rdh/medium/nl_BE-rdh-medium.onnx.json",
 ]
 ARGOS_PAIRS = (("fr", "nl"), ("en", "nl"))
+# Whisper herkent Noors als "no". Argos publiceert alleen Noors Bokmål, code "nb".
+WHISPER_TO_ARGOS = {"no": "nb"}
+
+
+def argos_language(source):
+    """Argos-code voor een Whisper-brontaal."""
+    return WHISPER_TO_ARGOS.get(source or "", source)
 
 
 def download_voices():
@@ -67,6 +74,7 @@ def _voice_file_ok(path, final_name=None):
 
 
 def _argos_ready(source):
+    source = argos_language(source)
     import argostranslate.translate as tr
     # Argos onthoudt talen in een cache én in een lijst van al gebouwde
     # vertalingen. Na een installatie in hetzelfde proces moeten beide leeg,
@@ -99,6 +107,7 @@ def installed_translation_pairs():
 
 def argos_can_translate(source, pairs=None):
     """Of source naar Nederlands kan, rechtstreeks of via Engels."""
+    source = argos_language(source)
     if source == "nl":
         return True
     if pairs is None:
@@ -130,6 +139,7 @@ def ensure_argos_package(source):
     die zelf tot één vertaling.
     """
     import argostranslate.package as pkg
+    source = argos_language(source)
     if source == "nl" or _argos_ready(source):
         return
     pkg.update_package_index()
@@ -152,7 +162,11 @@ def ensure_argos_package(source):
 
 
 def install_argos():
-    """Installeer Frans->Nederlands en Engels->Nederlands."""
+    """Installeer Frans en Engels naar het Nederlands.
+
+    Duits, Spaans, Italiaans, Zweeds, Noors, Deens en Fins volgen bij de
+    eerste vertaling in die taal. Die pakketten zijn groot en gaan via Engels.
+    """
     try:
         import argostranslate.package  # noqa: F401
     except ImportError:
