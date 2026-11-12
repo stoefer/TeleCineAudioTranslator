@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publiceer de GitHub-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ver=$(tr -d '[:space:]' < VERSION)
+          tag="${GITHUB_REF_NAME}"
+          expected="v${ver}"
+          if [ "$tag" != "$expected" ]; then
+            echo "Tag $tag hoort bij VERSION $ver ($expected)."
+            exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag bestaat al."
+            exit 0
+          fi
+          folder="TeleCine-Audio-Translator-${ver}"
+          mkdir -p "dist/${folder}/voices"
+          for name in \
+            .gitignore \
+            README.md \
+            TeleCine_AudioTranslator.py \
+            TeleCine_AudioTranslator.pyw \
+            VERSION \
+            installeer.bat \
+            installeer.sh \
+            maak-snelkoppeling.ps1 \
+            requirements-uvr.txt \
+            requirements.txt \
+            start-bij-aanmelden.bat \
+            start-bij-aanmelden.sh \
+            start.bat \
+            start.sh \
+            start.vbs \
+            telecine_media.py \
+            telecine_setup.py \
+            verhoog_versie.py
+          do
+            cp "$name" "dist/${folder}/"
+          done
+          cp voices/.gitkeep "dist/${folder}/voices/"
+          zip_path="dist/${folder}-Windows.zip"
+          (cd dist && zip -r "${folder}-Windows.zip" "$folder")
+          notes=$(mktemp)
+          {
+            echo "TeleCine Audio Translator ${ver}."
+            echo
+            echo "Download ${folder}-Windows.zip. Pak die uit naar een gewone map, bijvoorbeeld het Bureaublad. Start installeer.bat niet vanuit het zip-bestand."
+            echo
+            echo "Nieuw: na de spraakherkenning kun je de transcriptie corrigeren, en na de vertaling het Nederlands, voordat de Vlaamse stem verdergaat. De begin- en eindtijd van elke zin blijven staan. In de uitvoermap komen ook ondertitels."
+            echo
+            echo "Op Windows is Python 3.12 nodig voor stemscheiding. Python 3.14 heeft dat pakket niet. eSpeak NG is nodig voor de Vlaamse uitspraak."
+          } > "$notes"
+          gh release create "$tag" \
+            --target "${GITHUB_SHA}" \
+            --title "TeleCine Audio Translator ${ver}" \
+            --notes-file "$notes" \
+            "$zip_path"
