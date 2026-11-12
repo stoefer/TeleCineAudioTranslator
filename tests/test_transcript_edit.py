@@ -444,5 +444,82 @@ class AppearanceTests(unittest.TestCase):
             self.assertEqual(appmod.load_appearance(Path(folder) / "ontbreekt.json"), "Licht")
 
 
+class FullSentenceTests(unittest.TestCase):
+    def assert_starts(self, starts, durations, pause, expected):
+        placed = appmod.schedule_full_sentences(starts, durations, pause)
+        self.assertEqual(len(placed), len(expected))
+        for got, want in zip(placed, expected):
+            self.assertAlmostEqual(got, want, places=6)
+
+    def test_a_sentence_that_fits_keeps_the_next_start(self):
+        self.assert_starts([0.0, 2.0], [1.0, 0.5], 0.3, [0.0, 2.0])
+
+    def test_a_long_sentence_pushes_the_next_one_by_the_pause(self):
+        self.assert_starts([0.0, 1.0], [2.5, 0.4], 0.3, [0.0, 2.8])
+
+    def test_a_chain_of_long_sentences_keeps_moving(self):
+        self.assert_starts([0.0, 1.0, 3.0], [2.5, 0.4, 0.4], 0.2, [0.0, 2.7, 3.3])
+
+    def test_an_empty_sentence_does_not_add_a_pause(self):
+        self.assert_starts([0.0, 1.0, 1.2], [0.4, 0.0, 0.3], 0.5, [0.0, 1.0, 1.2])
+
+    def test_an_exact_fit_keeps_the_original_start(self):
+        self.assert_starts([0.0, 1.0], [1.0, 0.2], 0.3, [0.0, 1.0])
+
+    def test_spoken_times_replace_only_the_given_sentences(self):
+        segments = [
+            {"start": 0, "end": 1, "translation": "een"},
+            {"start": 1, "end": 2, "translation": "twee"},
+        ]
+        updated = appmod.apply_spoken_times(segments, {"1": [2.8, 3.2]})
+        self.assertEqual(updated[0]["start"], 0)
+        self.assertEqual(updated[1]["start"], 2.8)
+        self.assertEqual(updated[1]["end"], 3.2)
+        self.assertEqual(segments[1]["start"], 1)
+
+    def test_pause_label_uses_a_comma(self):
+        self.assertEqual(appmod.pause_seconds("0,3"), 0.3)
+        self.assertEqual(appmod.pause_seconds("kapot"), 0.3)
+
+
+class FullSentenceUiTests(unittest.TestCase):
+    def setUp(self):
+        self.app = appmod.App()
+        self.app.withdraw()
+
+    def tearDown(self):
+        cancel_after(self.app)
+        try:
+            self.app.destroy()
+        except appmod.tk.TclError:
+            pass
+
+    def test_the_option_is_off_until_lip_sync_is_not_required(self):
+        self.assertFalse(self.app.hold_full.get())
+        self.assertEqual(self.app.sentence_pause.get(), "0,3")
+        self.assertIn("helemaal uitspreken", self.app.hold_check.cget("text"))
+        self.assertEqual(str(self.app.pause_box.cget("state")), "disabled")
+        self.assertEqual(str(self.app.speed_box.cget("state")), "readonly")
+        self.assertEqual(tuple(self.app.pause_box.cget("values")), appmod.SENTENCE_PAUSES)
+        self.app.hold_full.set(True)
+        self.app._sync_timing_controls()
+        self.assertEqual(str(self.app.pause_box.cget("state")), "readonly")
+        self.assertEqual(str(self.app.speed_box.cget("state")), "disabled")
+        state = self.app.default_state("/tmp/telecine-bron.wav")
+        self.assertTrue(state["hold_full"])
+        self.assertEqual(state["sentence_pause"], 0.3)
+        self.app.sync_timing.set(False)
+        self.app._sync_timing_controls()
+        self.assertEqual(str(self.app.hold_check.cget("state")), "disabled")
+        self.assertFalse(self.app.default_state("/tmp/telecine-bron.wav")["hold_full"])
+
+    def test_a_saved_job_restores_the_pause(self):
+        self.app.apply_job_state({"hold_full": True, "sentence_pause": 0.8, "sync_timing": True})
+        self.assertTrue(self.app.hold_full.get())
+        self.assertEqual(self.app.sentence_pause.get(), "0,8")
+        self.assertEqual(str(self.app.pause_box.cget("state")), "readonly")
+        self.assertEqual(str(self.app.speed_box.cget("state")), "disabled")
+
+
 if __name__ == "__main__":
     unittest.main()

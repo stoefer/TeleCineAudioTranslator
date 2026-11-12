@@ -422,7 +422,54 @@ def run_piper(text, output, voice_name, stop, child_setter):
                 extra="\n\neSpeak NG is niet gevonden. Installeer het met:\nsudo apt install espeak-ng"
         raise RuntimeError("De Vlaamse stem kon niet gemaakt worden.\n"+(err or "").strip()+extra)
 
-def build_synchronized_voice(segments, output, temp_dir, voice_name, max_speed_pct, source_duration, stop, callback, child_setter):
+SENTENCE_PAUSES = ("0,1", "0,2", "0,3", "0,5", "0,8", "1,0")
+
+def pause_seconds(label, default=0.3):
+    """0,3 of 0.3 wordt seconden. Een onbekende waarde valt terug op 0,3."""
+    try:
+        value = float(str(label).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+    if value < 0:
+        return default
+    return round(value, 1)
+
+def schedule_full_sentences(starts, durations, pause):
+    """Starttijden als een te lange zin eerst helemaal uitgesproken wordt.
+
+    Een zin die klaar is voor de volgende oorspronkelijke start, houdt die start.
+    Loopt ze nog, dan begint de volgende pas na het einde, plus `pause` seconden.
+    Een duur van 0 schuift de volgende zin niet op.
+    """
+    pause = max(0.0, float(pause))
+    placed = []
+    previous_end = None
+    for start, duration in zip(starts, durations):
+        start = float(start)
+        duration = max(0.0, float(duration))
+        if previous_end is not None and previous_end > start:
+            start = previous_end + pause
+        placed.append(start)
+        if duration > 0:
+            previous_end = start + duration
+    return placed
+
+def apply_spoken_times(segments, spoken_times):
+    """Zet de uitgesproken begin- en eindtijd op de zinnen voor de ondertitel."""
+    times = spoken_times or {}
+    updated = []
+    for index, segment in enumerate(segments):
+        item = dict(segment)
+        pair = times.get(str(index))
+        if pair is None:
+            pair = times.get(index)
+        if pair and len(pair) == 2:
+            item["start"] = float(pair[0])
+            item["end"] = float(pair[1])
+        updated.append(item)
+    return updated
+
+def build_synchronized_voice(segments, output, temp_dir, voice_name, max_speed_pct, source_duration, stop, callback, child_setter, hold_full=False, pause=0.3):
     try:
         import numpy as np, soundfile as sf
     except ImportError as e:
@@ -442,24 +489,36 @@ def build_synchronized_voice(segments, output, temp_dir, voice_name, max_speed_p
         if sr!=sample_rate:
             old=np.arange(len(audio),dtype=np.float64); n=max(1,round(len(audio)*sample_rate/sr)); new=np.linspace(0,max(0,len(audio)-1),n)
             audio=np.column_stack([np.interp(new,old,audio[:,c]) for c in range(audio.shape[1])]).astype("float32")
-        slot=max(0.10,float(seg["end"])-float(seg["start"])); actual=len(audio)/sample_rate
-        allowed=1.0+max(0,max_speed_pct)/100.0
-        speed=min(allowed,max(1.0,actual/slot))
-        if speed>1.001:
-            n=max(1,round(len(audio)/speed)); old=np.arange(len(audio),dtype=np.float64); new=np.linspace(0,max(0,len(audio)-1),n)
-            audio=np.column_stack([np.interp(new,old,audio[:,c]) for c in range(audio.shape[1])]).astype("float32")
-        if len(audio)/sample_rate>slot+0.03: warnings.append(i+1)
-        rendered.append((float(seg["start"]),audio)); callback((i+1)/total)
+        if not hold_full:
+            slot=max(0.10,float(seg["end"])-float(seg["start"])); actual=len(audio)/sample_rate
+            allowed=1.0+max(0,max_speed_pct)/100.0
+            speed=min(allowed,max(1.0,actual/slot))
+            if speed>1.001:
+                n=max(1,round(len(audio)/speed)); old=np.arange(len(audio),dtype=np.float64); new=np.linspace(0,max(0,len(audio)-1),n)
+                audio=np.column_stack([np.interp(new,old,audio[:,c]) for c in range(audio.shape[1])]).astype("float32")
+            if len(audio)/sample_rate>slot+0.03: warnings.append(i+1)
+        rendered.append((i,float(seg["start"]),audio)); callback((i+1)/total)
     if sample_rate is None: raise RuntimeError("Er zijn geen Vlaamse segmenten gegenereerd.")
-    channels=max(a.shape[1] for _,a in rendered); length=max(round(source_duration*sample_rate),max(round(st*sample_rate)+len(a) for st,a in rendered))
+    if hold_full:
+        durations=[len(audio)/sample_rate for _,_,audio in rendered]
+        placed_starts=schedule_full_sentences([start for _,start,_ in rendered], durations, pause)
+    else:
+        placed_starts=[start for _,start,_ in rendered]
+    placements={}
+    placed=[]
+    for (index,_start,audio),start in zip(rendered, placed_starts):
+        end=start+len(audio)/sample_rate
+        placements[index]=(start,end)
+        placed.append((start,audio))
+    channels=max(a.shape[1] for _,a in placed); length=max(round(source_duration*sample_rate),max(round(st*sample_rate)+len(a) for st,a in placed))
     canvas=np.zeros((length,channels),dtype="float32")
-    for start,a in rendered:
+    for start,a in placed:
         if a.shape[1]==1 and channels>1: a=np.repeat(a,channels,axis=1)
         pos=round(start*sample_rate); end=min(length,pos+len(a)); canvas[pos:end,:a.shape[1]] += a[:end-pos]
     peak=float(np.max(np.abs(canvas))) if canvas.size else 0
     if peak>0.98: canvas*=0.98/peak
     sf.write(str(output),canvas,sample_rate,subtype="PCM_16")
-    return warnings
+    return warnings, placements
 
 def mix_wavs(background, voice, output, bg_gain=1.0, voice_gain=1.0):
     try:
@@ -809,7 +868,7 @@ class App(tk.Tk):
         self.voice_choice=tk.StringVar(value=DEFAULT_VOICE_LABEL)
         self.use_uvr=tk.BooleanVar(value=True); self.keep_stems=tk.BooleanVar(value=True)
         self.write_mp4=tk.BooleanVar(value=True)
-        self.sync_timing=tk.BooleanVar(value=True); self.edit_transcript=tk.BooleanVar(value=True); self.edit_translation=tk.BooleanVar(value=True); self.max_speed=tk.IntVar(value=15)
+        self.sync_timing=tk.BooleanVar(value=True); self.hold_full=tk.BooleanVar(value=False); self.sentence_pause=tk.StringVar(value="0,3"); self.edit_transcript=tk.BooleanVar(value=True); self.edit_translation=tk.BooleanVar(value=True); self.max_speed=tk.IntVar(value=15)
         self.bg_volume=tk.DoubleVar(value=100); self.voice_volume=tk.DoubleVar(value=100)
         self.bg_volume_text=tk.StringVar(value="100%"); self.voice_volume_text=tk.StringVar(value="100%")
         self.hint=tk.StringVar(value="Installatie controleren...")
@@ -927,10 +986,17 @@ class App(tk.Tk):
         ttk.Label(u,textvariable=self.voice_volume_text,width=5).grid(row=2,column=2)
         sy=ttk.LabelFrame(m,text="Synchronisatie met originele timing",padding=8); sy.grid(row=6,column=0,columnspan=3,sticky="ew",pady=6)
         sy.columnconfigure(1,weight=1)
-        self.sync_check=ttk.Checkbutton(sy,text="Oorspronkelijke starttijden en stiltes behouden",variable=self.sync_timing); self.sync_check.grid(row=0,column=0,columnspan=3,sticky="w")
+        self.sync_check=ttk.Checkbutton(sy,text="Oorspronkelijke starttijden en stiltes behouden",variable=self.sync_timing,command=self._sync_timing_controls); self.sync_check.grid(row=0,column=0,columnspan=3,sticky="w")
         ttk.Label(sy,text="Maximale versnelling van Vlaamse segmenten:").grid(row=1,column=0,sticky="w",pady=(6,0))
         self.speed_box=ttk.Combobox(sy,textvariable=self.max_speed,values=[0,5,10,15,20,25,30],state="readonly",width=8); self.speed_box.grid(row=1,column=1,sticky="w",padx=8,pady=(6,0))
         ttk.Label(sy,text="%").grid(row=1,column=2,sticky="w",pady=(6,0))
+        self.hold_check=ttk.Checkbutton(sy,text="Te lange zin helemaal uitspreken voordat de volgende start",variable=self.hold_full,command=self._sync_timing_controls)
+        self.hold_check.grid(row=2,column=0,columnspan=3,sticky="w",pady=(8,0))
+        ttk.Label(sy,text="Tussenpauze daarna:").grid(row=3,column=0,sticky="w",pady=(6,0))
+        self.pause_box=ttk.Combobox(sy,textvariable=self.sentence_pause,values=list(SENTENCE_PAUSES),state="disabled",width=8)
+        self.pause_box.grid(row=3,column=1,sticky="w",padx=8,pady=(6,0))
+        ttk.Label(sy,text="s").grid(row=3,column=2,sticky="w",pady=(6,0))
+        self._sync_timing_controls()
         bind_wheel(m); bind_wheel(canvas)
         uvr_bar=ttk.Frame(outer); uvr_bar.grid(row=1,column=0,sticky="ew",pady=(6,0))
         self.uvr_check=ttk.Checkbutton(uvr_bar,text="Stem met UVR scheiden en originele achtergrond/muziek behouden",variable=self.use_uvr)
@@ -1291,7 +1357,7 @@ class App(tk.Tk):
         s=Path(source).resolve(); sig=f"{s}|{s.stat().st_mtime_ns}|{s.stat().st_size}"; jid=hashlib.sha256(sig.encode()).hexdigest()[:16]; d=JOB_DIR/f"{safe_name(s.stem)}_{jid}"
         return {"folder":d,"state":d/"state.json","transcript":d/"transcript.txt","translation":d/"translation_nl.txt","extracted":d/"bron_audio.wav","vocals":d/"uvr_vocals.wav","background":d/"uvr_background.wav","voice":d/"vlaamse_stem.wav","mixed":d/"vlaams_met_achtergrond.wav","uvr_out":d/"uvr_output","segments":d/"segments.json","translated_segments":d/"segments_nl.json","segment_audio":d/"segment_audio"}
     def default_state(self,s):
-        return {"source":str(Path(s).resolve()),"source_language":LANGUAGES.get(self.language.get(),"fr"),"model":self.whisper.get(),"voice":VOICES[self.voice_choice.get()],"voice_label":self.voice_choice.get(),"use_uvr":bool(self.use_uvr.get()),"keep_stems":bool(self.keep_stems.get()),"write_mp4":bool(self.write_mp4.get()),"bg_volume":int(round(float(self.bg_volume.get()))),"voice_volume":int(round(float(self.voice_volume.get()))),"sync_timing":bool(self.sync_timing.get()),"edit_transcript":bool(self.edit_transcript.get()),"edit_translation":bool(self.edit_translation.get()),"max_speed":int(self.max_speed.get()),"completed_steps":0,"elapsed":0.,"status":"nieuw","output_dir":str(Path(self.outdir.get() or BASE_DIR/"Output").resolve()),"output_file":"","output_video":"","subtitle_file":"","last_error":""}
+        return {"source":str(Path(s).resolve()),"source_language":LANGUAGES.get(self.language.get(),"fr"),"model":self.whisper.get(),"voice":VOICES[self.voice_choice.get()],"voice_label":self.voice_choice.get(),"use_uvr":bool(self.use_uvr.get()),"keep_stems":bool(self.keep_stems.get()),"write_mp4":bool(self.write_mp4.get()),"bg_volume":int(round(float(self.bg_volume.get()))),"voice_volume":int(round(float(self.voice_volume.get()))),"sync_timing":bool(self.sync_timing.get()),"hold_full":bool(self.hold_full.get()) and bool(self.sync_timing.get()),"sentence_pause":pause_seconds(self.sentence_pause.get()),"edit_transcript":bool(self.edit_transcript.get()),"edit_translation":bool(self.edit_translation.get()),"max_speed":int(self.max_speed.get()),"completed_steps":0,"elapsed":0.,"status":"nieuw","output_dir":str(Path(self.outdir.get() or BASE_DIR/"Output").resolve()),"output_file":"","output_video":"","subtitle_file":"","last_error":""}
     def load(self,p):
         try:return json.loads(p["state"].read_text(encoding="utf-8"))
         except:return None
@@ -1367,6 +1433,11 @@ class App(tk.Tk):
             if speed in (0,5,10,15,20,25,30): self.max_speed.set(speed)
         except (TypeError,ValueError,tk.TclError): pass
         if st.get("output_dir"): self.outdir.set(st["output_dir"])
+        self.hold_full.set(bool(st.get("hold_full", False)))
+        pause = pause_seconds(st.get("sentence_pause", 0.3))
+        label = next((item for item in SENTENCE_PAUSES if abs(pause_seconds(item) - pause) < 0.05), "0,3")
+        self.sentence_pause.set(label)
+        self._sync_timing_controls()
         self.show_route_note()
     def resume_job(self):
         if getattr(self,"_accepting_edit",False) or (self.worker and self.worker.is_alive()): return
@@ -1382,13 +1453,26 @@ class App(tk.Tk):
         if self.worker and self.worker.is_alive():return
         self.stop_event.clear(); self.started=time.monotonic(); self.elapsed_before=float(st.get("elapsed",0)); self.state=st; self.progress=sum(WEIGHTS[:st.get("completed_steps",0)])*100; self.running(True)
         self.worker=threading.Thread(target=self.pipeline,args=(p,st),daemon=True); self.worker.start()
+    def _sync_timing_controls(self):
+        """Versnelling hoort bij lip-sync. De pauze hoort bij een zin die eerst uitgesproken wordt."""
+        locked = bool(getattr(self, "_controls_locked", False))
+        sync = bool(self.sync_timing.get())
+        hold = bool(self.hold_full.get())
+        if hasattr(self, "hold_check"):
+            self.hold_check.config(state="disabled" if locked or not sync else "normal")
+        if hasattr(self, "speed_box"):
+            self.speed_box.config(state="disabled" if locked or not sync or hold else "readonly")
+        if hasattr(self, "pause_box"):
+            self.pause_box.config(state="disabled" if locked or not sync or not hold else "readonly")
     def running(self,on):
+        self._controls_locked = bool(on)
         self.start.config(state="disabled" if on else "normal"); self.stop.config(state="normal" if on else "disabled")
         if on: self.resume.config(state="disabled")
-        for widget in (self.source_entry,self.out_entry,self.source_button,self.out_button,self.uvr_check,self.keep_stems_check,self.sync_check,self.mp4_check,self.edit_check,self.translation_check,self.bg_scale,self.voice_scale):
+        for widget in (self.source_entry,self.out_entry,self.source_button,self.out_button,self.uvr_check,self.keep_stems_check,self.sync_check,self.hold_check,self.mp4_check,self.edit_check,self.translation_check,self.bg_scale,self.voice_scale):
             widget.config(state="disabled" if on else "normal")
-        for widget in (self.lang,self.model,self.voice,self.speed_box):
+        for widget in (self.lang,self.model,self.voice):
             widget.config(state="disabled" if on else "readonly")
+        self._sync_timing_controls()
     def _stop_child(self):
         proc=self.child
         if not proc or proc.poll() is not None: return
@@ -1576,11 +1660,21 @@ class App(tk.Tk):
                 translated=json.loads(p["translated_segments"].read_text(encoding="utf-8"))
                 if st.get("sync_timing",True):
                     src_duration=read_wav_duration(audio)
-                    warnings=build_synchronized_voice(translated,p["voice"],p["segment_audio"],st["voice"],int(st.get("max_speed",15)),src_duration,self.stop_event,lambda f:self.stage(4,f,"Vlaamse segmenten op tijdcode plaatsen..."),lambda proc:setattr(self,"child",proc))
-                    st["timing_warnings"]=warnings
+                    hold=bool(st.get("hold_full"))
+                    pause=pause_seconds(st.get("sentence_pause", 0.3))
+                    warnings,placements=build_synchronized_voice(translated,p["voice"],p["segment_audio"],st["voice"],int(st.get("max_speed",15)),src_duration,self.stop_event,lambda f:self.stage(4,f,"Vlaamse segmenten op tijdcode plaatsen..."),lambda proc:setattr(self,"child",proc),hold_full=hold,pause=pause)
+                    st["timing_warnings"]=[] if hold else warnings
+                    if hold:
+                        st["spoken_times"]={str(i): [round(start, 3), round(end, 3)] for i, (start, end) in placements.items()}
+                        st["deferred_sentences"]=sum(1 for i, (start, _end) in placements.items() if start > float(translated[i]["start"]) + 0.001)
+                    else:
+                        st.pop("spoken_times", None)
+                        st.pop("deferred_sentences", None)
                 else:
                     full=" ".join(spoken_text(x,"translation") for x in translated if spoken_text(x,"translation"))
                     run_piper(full,p["voice"],st["voice"],self.stop_event,lambda proc:setattr(self,"child",proc))
+                    st.pop("spoken_times", None)
+                    st.pop("deferred_sentences", None)
                 self.queue_measure("voice",p["voice"],"voice_raw"); self.finish(p,st,5); done=5
             if done<6:
                 if st.get("use_uvr"):
@@ -1591,10 +1685,12 @@ class App(tk.Tk):
             if done<7:
                 self.stage(6,.2,"Resultaten opslaan..."); out=Path(st["output_dir"]); out.mkdir(parents=True,exist_ok=True); stem=safe_name(source.stem)
                 final=out/f"{stem}_Vlaams_met_achtergrond.wav" if st.get("use_uvr") else out/f"{stem}_Vlaams.wav"; shutil.copy2(p["mixed"],final)
-                shutil.copy2(p["transcript"],out/f"{stem}_transcript_{st['source_language']}.txt"); shutil.copy2(p["translation"],out/f"{stem}_vertaling_nl.txt")
+                shutil.copy2(p["transcript"],out/f"{stem}_transcript_{st['source_language']}.txt")
                 source_segments=json.loads(p["segments"].read_text(encoding="utf-8")); translated_segments=json.loads(p["translated_segments"].read_text(encoding="utf-8"))
+                dutch_segments=apply_spoken_times(translated_segments, st.get("spoken_times")) if st.get("hold_full") and st.get("spoken_times") else translated_segments
+                (out/f"{stem}_vertaling_nl.txt").write_text(format_timed_text(dutch_segments, "translation"), encoding="utf-8")
                 source_srt=out/f"{stem}_transcript_{st['source_language']}.srt"; dutch_srt=out/f"{stem}_vertaling_nl.srt"
-                write_srt(source_segments,source_srt,"text"); write_srt(translated_segments,dutch_srt,"translation")
+                write_srt(source_segments,source_srt,"text"); write_srt(dutch_segments,dutch_srt,"translation")
                 st["subtitle_file"]=str(dutch_srt)
                 if st.get("use_uvr") and st.get("keep_stems"):
                     shutil.copy2(p["vocals"],out/f"{stem}_UVR_stem.wav"); shutil.copy2(p["background"],out/f"{stem}_UVR_achtergrond.wav")
@@ -1650,7 +1746,13 @@ class App(tk.Tk):
                     self.stop_audio(); self.play_status.set("Eindmix gereed voor live afspelen")
                     done_note=translation_route_note((self.state or {}).get("source_language",""))
                     self.set_progress(100); self.running(False); self.resume.config(state="disabled"); self.status.set("Klaar! "+done_note if done_note else "Klaar!"); self.remaining.set("00:00:00"); srt=x[2] if len(x)>2 and x[2] else ""
-                    self.show_steps(len(STEPS),"completed"); messagebox.showinfo(APP_TITLE,"Verwerking voltooid.\n\n"+x[1]+(("\n\nNederlandse ondertitels:\n"+srt) if srt else "")+(("\n\n"+done_note) if done_note else "")+("\n\nLet op: enkele segmenten waren langer dan hun tijdvak en kunnen overlappen." if self.state and self.state.get("timing_warnings") else ""))
+                    timing_note=""
+                    if self.state and self.state.get("deferred_sentences"):
+                        count=int(self.state["deferred_sentences"])
+                        timing_note="\n\n{0} te lange {1} helemaal uitgesproken. De volgende zin volgt na de gekozen pauze. De Nederlandse ondertitels gebruiken die tijden.".format(count, "zinnen zijn" if count != 1 else "zin is")
+                    elif self.state and self.state.get("timing_warnings"):
+                        timing_note="\n\nLet op: enkele segmenten waren langer dan hun tijdvak en kunnen overlappen."
+                    self.show_steps(len(STEPS),"completed"); messagebox.showinfo(APP_TITLE,"Verwerking voltooid.\n\n"+x[1]+(("\n\nNederlandse ondertitels:\n"+srt) if srt else "")+(("\n\n"+done_note) if done_note else "")+timing_note)
                 elif kind=="error":
                     _,err,n=x; self.running(False); self.resume.config(state="normal"); self.status.set("Fout tijdens verwerking"); self.resume_text.set(f"Hervatten vanaf stap {n+1}: {STEPS[min(n,len(STEPS)-1)]}"); self.show_steps(min(n,len(STEPS)-1),"error"); messagebox.showerror(APP_TITLE,err)
         except queue.Empty:pass
