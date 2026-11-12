@@ -417,5 +417,88 @@ class AppearanceTests(unittest.TestCase):
             self.assertEqual(appmod.load_appearance(Path(folder) / "ontbreekt.json"), "Licht")
 
 
+class LanguageTests(unittest.TestCase):
+    def test_source_languages_include_the_requested_set(self):
+        self.assertEqual(
+            list(appmod.LANGUAGES),
+            ["Frans", "Engels", "Duits", "Spaans", "Italiaans", "Zweeds", "Noors", "Deens", "Fins"],
+        )
+        self.assertEqual(
+            [appmod.LANGUAGES[name] for name in ("Duits", "Spaans", "Italiaans", "Zweeds", "Noors", "Deens", "Fins")],
+            ["de", "es", "it", "sv", "no", "da", "fi"],
+        )
+
+    def test_route_note_names_every_language_except_english(self):
+        self.assertEqual(appmod.translation_route_note("en"), "")
+        self.assertEqual(appmod.translation_route_note("fr"), "Frans wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("de"), "Duits wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("es"), "Spaans wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("it"), "Italiaans wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("sv"), "Zweeds wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("no"), "Noors wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("da"), "Deens wordt via Engels vertaald.")
+        self.assertEqual(appmod.translation_route_note("fi"), "Fins wordt via Engels vertaald.")
+
+    def test_norwegian_uses_the_argos_bokmal_package(self):
+        from telecine_setup import argos_can_translate, argos_language
+        self.assertEqual(argos_language("no"), "nb")
+        self.assertEqual(argos_language("de"), "de")
+        self.assertEqual(argos_language("fi"), "fi")
+        ready = {("nb", "en"), ("en", "nl")}
+        self.assertTrue(argos_can_translate("no", ready))
+        self.assertFalse(argos_can_translate("sv", ready))
+        self.assertTrue(argos_can_translate("sv", {("sv", "en"), ("en", "nl")}))
+        self.assertTrue(argos_can_translate("en", {("en", "nl")}))
+        self.assertFalse(argos_can_translate("da", {("da", "en")}))
+
+    def test_norwegian_translation_asks_argos_for_bokmal(self):
+        import types
+        calls = []
+        module = types.ModuleType("argostranslate.translate")
+
+        def translate(text, source, target):
+            calls.append((source, target, text))
+            return "Hallo"
+
+        module.translate = translate
+        parent = types.ModuleType("argostranslate")
+        parent.translate = module
+        saved = {name: sys.modules.get(name) for name in ("argostranslate", "argostranslate.translate")}
+        sys.modules["argostranslate"] = parent
+        sys.modules["argostranslate.translate"] = module
+        try:
+            out = appmod.translate_segments(
+                [{"start": 0.0, "end": 1.0, "text": "Hei"}],
+                "no",
+                threading.Event(),
+                lambda _fraction: None,
+            )
+        finally:
+            for name, item in saved.items():
+                if item is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = item
+        self.assertEqual(calls, [("nb", "nl", "Hei")])
+        self.assertEqual(out[0]["translation"], "Hallo")
+        self.assertEqual(out[0]["start"], 0.0)
+        self.assertEqual(out[0]["end"], 1.0)
+
+    def test_language_menu_lists_every_source_language(self):
+        app = appmod.App()
+        app.update()
+        try:
+            self.assertEqual(list(app.lang.cget("values")), list(appmod.LANGUAGES))
+            app.language.set("Fins")
+            app.show_route_note()
+            self.assertEqual(app.route_inline.get(), "Fins wordt via Engels vertaald.")
+            app.language.set("Engels")
+            app.show_route_note()
+            self.assertEqual(app.route_inline.get(), "")
+        finally:
+            cancel_after(app)
+            app.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()

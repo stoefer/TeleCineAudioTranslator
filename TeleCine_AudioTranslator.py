@@ -37,13 +37,28 @@ VOICES = {
 }
 DEFAULT_VOICE_LABEL = "Nathalie - Vlaams (medium)"
 UVR_MODEL = "UVR-MDX-NET-Inst_HQ_3.onnx"
-LANGUAGES = {"Frans": "fr", "Engels": "en"}
+# Waarden zijn Whisper-codes. Noors is hier "no"; Argos gebruikt daarvoor "nb".
+LANGUAGES = {
+    "Frans": "fr",
+    "Engels": "en",
+    "Duits": "de",
+    "Spaans": "es",
+    "Italiaans": "it",
+    "Zweeds": "sv",
+    "Noors": "no",
+    "Deens": "da",
+    "Fins": "fi",
+}
 
 def translation_route_note(source):
-    """Korte status als Frans niet rechtstreeks naar het Nederlands gaat."""
-    if source == "fr":
-        return "Frans wordt via Engels vertaald."
-    return ""
+    """Korte status als de brontaal via Engels naar het Nederlands gaat.
+
+    Alleen Engels heeft bij Argos een rechtstreeks pakket naar het Nederlands.
+    """
+    if source in ("", "en", "nl"):
+        return ""
+    label = next((name for name, code in LANGUAGES.items() if code == source), source)
+    return f"{label} wordt via Engels vertaald."
 
 APPEARANCES = ("Licht", "Donker")
 APPEARANCE_COLORS = {
@@ -283,7 +298,9 @@ def read_wav_duration(path):
             return w.getnframes() / max(1, w.getframerate())
 
 def translate_chunks(text, source, stop, callback):
+    from telecine_setup import argos_language
     import argostranslate.translate as tr
+    source = argos_language(source)
     parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text) if p.strip()]
     chunks=[]; cur=""
     for p in parts:
@@ -385,7 +402,9 @@ def write_srt(segments, path, text_key="text"):
     Path(path).write_text("\n".join(cues) + ("\n" if cues else ""), encoding="utf-8")
 
 def translate_segments(segments, source, stop, callback):
+    from telecine_setup import argos_language
     import argostranslate.translate as tr
+    source = argos_language(source)
     out = []
     total = max(1, len(segments))
     for i, seg in enumerate(segments, 1):
@@ -885,7 +904,7 @@ class App(tk.Tk):
         for c in range(3): opt.columnconfigure(c,weight=1)
         ttk.Label(opt,text="Brontaal").grid(row=0,column=0,sticky="w"); ttk.Label(opt,text="Whisper-kwaliteit").grid(row=0,column=1,sticky="w"); ttk.Label(opt,text="Vlaamse stem").grid(row=0,column=2,sticky="w")
         self.lang=ttk.Combobox(opt,textvariable=self.language,values=list(LANGUAGES),state="readonly"); self.lang.grid(row=1,column=0,sticky="ew")
-        self.lang.bind("<<ComboboxSelected>>",lambda _e:self.show_route_note())
+        self.lang.bind("<<ComboboxSelected>>",lambda _e:self._on_language_selected())
         self.model=ttk.Combobox(opt,textvariable=self.whisper,values=WHISPER_MODELS,state="readonly"); self.model.grid(row=1,column=1,sticky="ew",padx=8)
         self.voice=ttk.Combobox(opt,textvariable=self.voice_choice,values=list(VOICES),state="readonly"); self.voice.current(0); self.voice.grid(row=1,column=2,sticky="ew")
         self.route_inline=tk.StringVar(value="")
@@ -1086,13 +1105,14 @@ class App(tk.Tk):
         if self.worker and self.worker.is_alive(): return
         self._env_gen+=1; gen=self._env_gen
         voice_label=self.voice_choice.get(); use_uvr=bool(self.use_uvr.get()); source_name=self.source.get()
+        language_code=LANGUAGES.get(self.language.get(),"fr")
         def work():
-            try: notes=self._environment_notes(voice_label,use_uvr,source_name)
+            try: notes=self._environment_notes(voice_label,use_uvr,source_name,language_code)
             except Exception as exc: notes=[f"Controle van de installatie mislukt: {exc}"]
             self.q.put(("env",gen,notes))
         threading.Thread(target=work,daemon=True).start()
 
-    def _environment_notes(self,voice_label,use_uvr,source_name=""):
+    def _environment_notes(self,voice_label,use_uvr,source_name="",language_code="fr"):
         notes=[]
         if source_name and is_video_file(source_name) and find_ffmpeg() is None:
             notes.append("FFmpeg ontbreekt. Dat is nodig om een MP4 te lezen en terug te schrijven.")
@@ -1109,9 +1129,9 @@ class App(tk.Tk):
         try:
             from telecine_setup import argos_can_translate, installed_translation_pairs
             pairs=installed_translation_pairs()
-            missing=[label for label,code in LANGUAGES.items() if not argos_can_translate(code,pairs)]
-            if missing:
-                notes.append("Vertaalpakket nog niet klaar voor "+" en ".join(missing)+". Dat wordt bij de eerste vertaling gedownload.")
+            label=next((name for name,code in LANGUAGES.items() if code==language_code), language_code)
+            if not argos_can_translate(language_code, pairs):
+                notes.append(f"Vertaalpakket voor {label} is nog niet klaar. Dat wordt bij de eerste vertaling gedownload.")
         except Exception:
             notes.append("Vertaalonderdeel ontbreekt. "+install_command_hint())
         return notes
@@ -1344,7 +1364,7 @@ class App(tk.Tk):
             if speed in (0,5,10,15,20,25,30): self.max_speed.set(speed)
         except (TypeError,ValueError,tk.TclError): pass
         if st.get("output_dir"): self.outdir.set(st["output_dir"])
-        self.show_route_note()
+        self.show_route_note(); self.refresh_environment_status()
     def resume_job(self):
         raw=self.source.get().strip()
         if not raw or not Path(raw).is_file():
@@ -1383,8 +1403,10 @@ class App(tk.Tk):
         threading.Thread(target=self._stop_child,daemon=True).start()
     def check_stop(self):
         if self.stop_event.is_set():raise StoppedByUser
+    def _on_language_selected(self):
+        self.show_route_note(); self.refresh_environment_status()
     def show_route_note(self):
-        """Toon dat Frans via Engels gaat, naast de taalkeuze en in de status."""
+        """Toon of de gekozen brontaal via Engels gaat."""
         note=translation_route_note(LANGUAGES.get(self.language.get(),""))
         if hasattr(self,"route_inline"): self.route_inline.set(note)
         self._refresh_hint()
