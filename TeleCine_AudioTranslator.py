@@ -510,6 +510,10 @@ class TranscriptEditor(tk.Toplevel):
         self._build()
         self._place()
         self.transient(master)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
         self.after(50, self._focus_first)
 
     def _build(self):
@@ -752,8 +756,26 @@ class TranscriptEditor(tk.Toplevel):
         self._stop_audio()
         callback = self.on_confirm
         self.on_confirm = lambda _edited: None
-        self.destroy()
+        # Eerst bewaren, daarna pas sluiten. Het sluiten kan anders de STOP-knop
+        # van het hoofdvenster raken en de net bevestigde tekst weggooien.
         callback(edited)
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
+        self.after(200, self._destroy_confirmed)
+
+    def _destroy_confirmed(self):
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+        master = self.master
+        if hasattr(master, "_end_accepting_edit"):
+            try:
+                master.after(300, master._end_accepting_edit)
+            except tk.TclError:
+                pass
 
     def _ask_cancel(self):
         if self._closed:
@@ -780,7 +802,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title(f"{APP_TITLE} {APP_VERSION}"); self.geometry("1180x900"); self.minsize(920,640)
         self.q=queue.Queue(); self.stop_event=threading.Event(); self.edit_ready=threading.Event(); self.worker=None; self.child=None
-        self._transcript_editor=None; self._edit_result=None
+        self._transcript_editor=None; self._edit_result=None; self._accepting_edit=False
         self.started=None; self.elapsed_before=0.; self.progress=0.; self.state=None
         self.source=tk.StringVar(); self.outdir=tk.StringVar(value=str(BASE_DIR/"Output"))
         self.language=tk.StringVar(value="Frans"); self.whisper=tk.StringVar(value="small")
@@ -1297,6 +1319,7 @@ class App(tk.Tk):
         options=[Path(sys.executable).parent/"audio-separator.exe",Path(sys.executable).parent/"audio-separator",shutil.which("audio-separator")]
         return next((str(x) for x in options if x and Path(x).exists()),None)
     def start_new(self):
+        if getattr(self,"_accepting_edit",False) or (self.worker and self.worker.is_alive()): return
         s=self.validate()
         if not s:return
         p=self.paths(s); old=self.load(p)
@@ -1346,6 +1369,7 @@ class App(tk.Tk):
         if st.get("output_dir"): self.outdir.set(st["output_dir"])
         self.show_route_note()
     def resume_job(self):
+        if getattr(self,"_accepting_edit",False) or (self.worker and self.worker.is_alive()): return
         raw=self.source.get().strip()
         if not raw or not Path(raw).is_file():
             messagebox.showerror(APP_TITLE,"Kies eerst een WAV- of MP4-bestand."); return
@@ -1375,7 +1399,11 @@ class App(tk.Tk):
             try: proc.kill()
             except Exception: pass
         except Exception: pass
+    def _end_accepting_edit(self):
+        self._accepting_edit=False
     def request_stop(self):
+        # Net na Spraak starten of Vertaling starten kan de klik op STOP vallen.
+        if getattr(self,"_accepting_edit",False): return
         self.stop_event.set(); self.status.set("Stop aangevraagd..."); self.stop.config(state="disabled")
         editor=getattr(self,"_transcript_editor",None)
         if editor is not None:
@@ -1398,11 +1426,14 @@ class App(tk.Tk):
         audio="" if audio_path is None else str(audio_path)
         self.q.put((kind,payload,audio))
         while not self.edit_ready.wait(0.2):
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() and not getattr(self,"_accepting_edit",False):
                 raise StoppedByUser
-        if self.stop_event.is_set() or self._edit_result is None:
-            raise StoppedByUser
-        return self._edit_result
+        result=self._edit_result
+        if result is not None:
+            self.stop_event.clear()
+            return result
+        self._accepting_edit=False
+        raise StoppedByUser
     def wait_for_transcript_edit(self, segments, audio_path):
         """Wacht tot het venster de gecorrigeerde bronzinnen teruggeeft."""
         payload=[{"start":float(item["start"]),"end":float(item["end"]),"text":spoken_text(item)} for item in segments]
@@ -1421,8 +1452,15 @@ class App(tk.Tk):
         if self._transcript_editor is not None:
             return
         def confirm(edited):
+            editor=self._transcript_editor
+            field=getattr(editor,"field","text")
             self._transcript_editor=None
             self._edit_result=edited
+            self._accepting_edit=True
+            if field=="translation":
+                self.status.set("Vertaling bewaard. De Vlaamse stem wordt gemaakt...")
+            else:
+                self.status.set("Transcriptie bewaard. De vertaling gaat verder...")
             self.edit_ready.set()
         def cancel():
             self._transcript_editor=None
@@ -1510,7 +1548,7 @@ class App(tk.Tk):
                 p["segments"].write_text(json.dumps(timed,ensure_ascii=False,indent=2),encoding="utf-8"); self.finish(p,st,3); done=3
             if done<4:
                 timed=json.loads(p["segments"].read_text(encoding="utf-8"))
-                if st.get("edit_transcript"):
+                if st.get("edit_transcript") and not st.get("transcript_edited"):
                     timed=self.wait_for_transcript_edit(timed, recognition_source)
                     p["segments"].write_text(json.dumps(timed,ensure_ascii=False,indent=2),encoding="utf-8")
                     p["transcript"].write_text(format_timed_text(timed),encoding="utf-8")
@@ -1526,14 +1564,15 @@ class App(tk.Tk):
                 p["translated_segments"].write_text(json.dumps(translated,ensure_ascii=False,indent=2),encoding="utf-8")
                 p["translation"].write_text(format_timed_text(translated,"translation"),encoding="utf-8"); self.finish(p,st,4); done=4
             if done<5:
-                if st.get("edit_translation"):
+                if st.get("edit_translation") and not st.get("translation_edited"):
                     translated=json.loads(p["translated_segments"].read_text(encoding="utf-8"))
                     translated=self.wait_for_translation_edit(translated, recognition_source)
                     p["translated_segments"].write_text(json.dumps(translated,ensure_ascii=False,indent=2),encoding="utf-8")
                     p["translation"].write_text(format_timed_text(translated,"translation"),encoding="utf-8")
                     st["translation_edited"]=True
                     self.save(p,st)
-                self.stage(4,.01,"Gesynchroniseerde Vlaamse segmenten genereren..."); p["voice"].unlink(missing_ok=True)
+                voice_msg="Vertaling bewaard. De Vlaamse stem wordt gemaakt..." if st.get("translation_edited") else "Gesynchroniseerde Vlaamse segmenten genereren..."
+                self.stage(4,.01,voice_msg); p["voice"].unlink(missing_ok=True)
                 translated=json.loads(p["translated_segments"].read_text(encoding="utf-8"))
                 if st.get("sync_timing",True):
                     src_duration=read_wav_duration(audio)

@@ -353,6 +353,33 @@ class AppPauseTests(unittest.TestCase):
         self.assertEqual(edited[1]["text"], "une phrase.")
         self.assertEqual([(item["start"], item["end"]) for item in edited], [(item["start"], item["end"]) for item in TRANSLATED])
 
+    def test_spraak_starten_keeps_the_correction_when_stop_is_pressed_as_the_window_closes(self):
+        holder = {}
+
+        def worker():
+            try:
+                holder["out"] = self.app.wait_for_translation_edit(TRANSLATED, None)
+            except Exception as exc:
+                holder["error"] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        self.app.worker = thread
+        thread.start()
+        self.assertTrue(self._wait_for(lambda: self.app._transcript_editor is not None))
+        editor = self.app._transcript_editor
+        editor._text_widgets[1].delete("1.0", "end")
+        editor._text_widgets[1].insert("1.0", "de verbeterde Nederlandse zin.")
+        editor._confirm()
+        self.app.request_stop()
+        self.app.update()
+        self.assertTrue(self._wait_for(lambda: "out" in holder or "error" in holder))
+        self.assertNotIn("error", holder)
+        edited = holder["out"]
+        self.assertEqual(edited[1]["translation"], "de verbeterde Nederlandse zin.")
+        self.assertEqual(edited[1]["text"], "une phrase.")
+        self.assertFalse(self.app.stop_event.is_set())
+        self.assertEqual(self.app.status.get(), "Vertaling bewaard. De Vlaamse stem wordt gemaakt...")
+
     def test_stop_during_editing_cancels_the_translation(self):
         holder = {}
 

@@ -1,6 +1,6 @@
 # TeleCine Audio Translator
 
-Versie **0.9.04**. Het venster toont het nummer uit het bestand `VERSION`.
+Versie **0.9.05**. Het venster toont het nummer uit het bestand `VERSION`.
 
 Vensterprogramma dat een Franse of Engelse WAV omzet naar Vlaamse spraak. Het behoudt de originele timing en kan de achtergrondmuziek laten staan.
 
@@ -53,7 +53,7 @@ Op Linux start je `./start.sh` in een terminal, zodat de melding zichtbaar blijf
 - Bron: een WAV-bestand of een MP4. Bij een MP4 blijft het beeld staan en komt de vertaling in een nieuwe MP4, als het vinkje **Bij een MP4 het beeld behouden** aanstaat. Daarvoor is [FFmpeg](https://ffmpeg.org/download.html) nodig. Zet `ffmpeg.exe` in PATH of in de programmamap. De WAV-mix wordt er ook nog bij geschreven.
 - Resultaat: de map `Output` (knop **UITVOERMAP OPENEN**). Daar staan de Vlaamse WAV (en eventueel MP4), de tekstbestanden en de ondertitels `..._vertaling_nl.srt` en `..._transcript_<taal>.srt`.
 - **Transcriptie bewerken voor de vertaling** staat standaard aan. Na de spraakherkenning verschijnt een venster met elke zin en haar begin- en eindtijd. Pas de zinsbouw aan en kies **Vertaling starten**.
-- **Nederlandse vertaling bewerken voor de spraak** staat ook standaard aan. Na de vertaling kun je het Nederlands corrigeren. De bronzin staat erboven. Kies daarna **Spraak starten**. De tijden blijven die van de herkenning, zodat de Nederlandse ondertitel en de Vlaamse stem op dezelfde plaats vallen.
+- **Nederlandse vertaling bewerken voor de spraak** staat ook standaard aan. Na de vertaling kun je het Nederlands corrigeren. De bronzin staat erboven. Kies daarna **Spraak starten**. Dat bewaart de correctie, maakt de Vlaamse stem en schrijft dezelfde tekst naar `..._vertaling_nl.srt`. De tijden blijven die van de herkenning. Stopt de stem daarna, dan gaat **Hervatten** verder met die bewaarde tekst en opent het correctievenster niet opnieuw.
 - Een leeg vak wordt niet uitgesproken en schuift de andere zinnen niet op. **Samenvoegen met volgende** maakt van twee opeenvolgende stukken één zin, van de eerste begintijd tot de tweede eindtijd. Zet een vinkje uit als die stap automatisch mag doorlopen.
 - Bij het starten opent het venster meteen zo hoog dat de instellingen leesbaar zijn. Past dat niet op het scherm, dan gebruikt het de vrije hoogte en schuift de rest.
 - **Weergave** staat rechtsboven in de instellingen. Kies **Licht** of **Donker**. Die keuze blijft bij de volgende start.
